@@ -1,0 +1,147 @@
+<?php
+
+/*
+ * Provides simple api for connecting to Akamai Net Storage
+ * phpseclib didn't work! Using command line
+ * Also, be sure to manually set the DEV ENVIRONMENT variable below to 1 when using locally
+ */
+define('DEV_ENVIRONMENT', (strpos($_SERVER['HTTP_HOST'], 'dev') !== FALSE));
+
+function akamai_sftp_prepare_transfer($vars) {
+  //node object is now an array
+
+  $transfer = array();
+  //error_log(print_r($vars,1));
+
+  foreach ($vars as $key => $value) {
+    //TODO: Generalize by making admin to select content types to do this with + handler funcs
+    //currently only the images have field prefixes
+    if (strpos($key, 'field_') !== FALSE) {
+      if (isset($vars[$key]['und'][0]['fid'])) {
+        $fid = $vars[$key]['und'][0]['fid'];
+        $file = file_load($fid);
+        $file_url = str_replace('public:/', '', $file->uri);
+        $img_path = variable_get('akamai_image_path', '');
+        $transfer[] = $img_path . $file_url;
+      }
+    }
+  }
+  akamai_sftp_transfer_file($transfer);
+}
+
+function akamai_sftp_transfer_file($files = array()) {
+  if (count($files)) {
+    //error_log("files = ".print_r($files,1));
+    
+    $remote = variable_get('akamai_url', '');
+    $key = variable_get('akamai_key_location', '');
+    $account = variable_get('akamai_account_user', '');
+
+    $commands = "<< EOF\n";
+    foreach ($files as $file) {
+      //remote name is what the file will be re-named to (just filename basically)
+      $remote_name = end(explode('/', $file));
+      $is_thumb = (strpos($file, 'thumbs/') !== FALSE);
+
+      if ($is_thumb)  {
+        $commands .= "cd thumbs\n";
+      }
+      $commands .= "put $file $remote_name\n";
+      if ($is_thumb) {
+        $commands .= "cd ..\n";
+      }
+    }
+    $commands .= "quit\nEOF";
+
+    //error_log("commands = $commands");
+
+    $command = `sftp -o IdentityFile=$key -o StrictHostKeyChecking=no $account@$remote $commands`;
+    //$str = "sftp -o IdentityFile=$key $account@$remote $commands";
+    //error_log($str);
+
+    try {
+      shell_exec($command);
+    }
+    catch (Exception $e) {
+      error_log("Oops! the SFTP request didn't work: ".print_r($e,1));
+    }
+  }
+}
+
+function akamai_sftp_menu() {
+  $items = array();
+
+  $items['admin/config/media/akamai'] = array(
+    'title' => 'Akamai SFTP Settings',
+    'description' => 'Configuration settings for the Akamai SFTP Module',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('akamai_sftp_admin_settings'),
+    'access arguments' => array('administer nodes'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  return $items;
+}
+
+function akamai_sftp_admin_settings() {
+  //admin should allow you to set url for akamai and directory
+  //also provide location for key
+  $form['akamai_url'] = array(
+    '#title' => 'Akamai SFTP Server URL',
+    '#description' => t('Enter the sftp url to Akamai Net Storage'),
+    '#type' => 'textfield',
+    '#size' => 50,
+    '#default_value' => variable_get('akamai_url', '')
+  );
+
+  $form['akamai_account_user'] = array(
+    '#title' => 'Akamai Account Username',
+    '#description' => t('Name of the user account on Akamai'),
+    '#type' => 'textfield',
+    '#size' => 50,
+    '#default_value' => variable_get('akamai_account_user', '')
+  );
+
+  $form['akamai_image_path'] = array(
+    '#title' => 'Akamai Local File Path',
+    '#description' => t('Local file system path to upload files from. Usually the files directory'),
+    '#type' => 'textfield',
+    '#size' => 50,
+    '#default_value' => variable_get('akamai_image_path', '')
+  );
+
+  $form['akamai_key_location'] = array(
+    '#title' => 'Akamai RSA Key',
+    '#description' => t('Enter the location of the key on the system'),
+    '#type' => 'textfield',
+    '#size' => 50,
+    '#default_value' => variable_get('akamai_key_location', '')
+  );
+
+  $form['akamai_base_image_path'] = array(
+    '#title' => 'Akamai Base Image Path',
+    '#description' => t('The url base image path for the image source'),
+    '#type' => 'textfield',
+    '#size' => 50,
+    '#default_value' => variable_get('akamai_base_image_path', '')
+  );
+  
+  return system_settings_form($form);
+}
+
+
+function akamai_sftp_node_insert($node) {
+  $vars = get_object_vars($node);
+  if (!DEV_ENVIRONMENT) {
+    akamai_sftp_prepare_transfer($vars);
+  }
+}
+
+
+function akamai_sftp_node_update($node) {
+  //see if the images are different first? or just transfer them over?
+  if (!DEV_ENVIRONMENT) {
+    $vars = get_object_vars($node);
+    akamai_sftp_prepare_transfer($vars);
+  }
+}

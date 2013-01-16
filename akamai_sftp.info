@@ -1,0 +1,4 @@
+name = Akamai SFTP
+description = Custom module to transfer files to Akamai Net Storage
+core = 7.x
+package = A+E
